@@ -1,0 +1,14 @@
+# Segredos e credenciais
+config.json
+token_cache.bin
+
+# Dados dos contratos (não versionar)
+contracts.json
+contexts/
+fontes/   # ajuste se mudar "fontes_dir" em config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

@@ -1,0 +1,9 @@
+{
+  "tenant_id": "COLE_O_DIRECTORY_TENANT_ID_AQUI",
+  "client_id": "COLE_O_APPLICATION_CLIENT_ID_AQUI",
+  "anthropic_api_key": "COLE_SUA_CHAVE_DA_ANTHROPIC_AQUI",
+  "model": "claude-sonnet-5",
+  "inbox_folder": "Inbox",
+  "ignore_folders": ["Inbox", "Sent Items", "Drafts", "Deleted Items", "Junk Email"],
+  "fontes_dir": "fontes"
+}
