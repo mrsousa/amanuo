@@ -4,7 +4,7 @@
   • Conteúdo/contexto    → carrega o(s) contexts/<id>.md relevante(s)
 
 Otimizações: system separado, índice de contratos cacheado no roteador,
-resposta do roteador em JSON via prefill, e uso de tokens ao final.
+resposta do roteador em JSON via structured outputs, e uso de tokens ao final.
 
 Uso:
     python ask.py "quais contratos são do cliente Acme?"
@@ -27,6 +27,17 @@ ANSWER_ROLE = (
     "Se a informação não estiver no contexto, diga que não encontrou. Cite o "
     "número do contrato quando fizer sentido."
 )
+
+ROUTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "mode": {"enum": ["structured", "context"]},
+        "answer": {"type": "string"},
+        "needed_contracts": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["mode", "answer", "needed_contracts"],
+    "additionalProperties": False,
+}
 
 
 def _index_block(contracts: dict) -> str:
@@ -61,23 +72,23 @@ def _route(config, question, contracts, available_ctx, total):
     ]
     user = (
         f"<pergunta>{question}</pergunta>\n\n"
-        "Se der pra responder só com os dados estruturados, responda direto. "
-        "Se precisar do conteúdo de contratos, peça-os. Responda SOMENTE com JSON:\n"
-        '{"mode": "structured"|"context", "answer": "<resposta se structured, '
-        'senão vazio>", "needed_contracts": ["<ids necessários; vazio se structured>"]}'
+        "Se der pra responder só com os dados estruturados, responda direto "
+        "(mode=structured, preencha answer). Se precisar do conteúdo de "
+        "contratos, peça-os (mode=context, needed_contracts com os IDs; "
+        "deixe answer vazio nesse caso)."
     )
     msg = classifier._client(config).messages.create(
         model=config.get("model", "claude-sonnet-5"),
         max_tokens=800,
         system=system,
-        messages=[
-            {"role": "user", "content": user},
-            {"role": "assistant", "content": "{"},  # prefill: força JSON
-        ],
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": ROUTE_SCHEMA}},
     )
     _acc(total, msg.usage)
+    if not msg.content:
+        return {"mode": "context", "answer": "", "needed_contracts": []}
     try:
-        return json.loads("{" + msg.content[0].text)
+        return json.loads(classifier._text(msg))
     except json.JSONDecodeError:
         return {"mode": "context", "answer": "", "needed_contracts": []}
 
@@ -106,7 +117,7 @@ def _answer_with_context(config, question, contracts, contexts, needed, total):
         messages=[{"role": "user", "content": f"<pergunta>{question}</pergunta>"}],
     )
     _acc(total, msg.usage)
-    return msg.content[0].text.strip()
+    return classifier._text(msg).strip()
 
 
 def ask(config, question: str):

@@ -35,6 +35,17 @@ def extract_cid(folder_name: str) -> str:
     m = CODE_RE.match(folder_name.strip())
     return m.group(1) if m else folder_name
 
+CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "contract_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "confidence": {"type": "number"},
+        "reason": {"type": "string"},
+    },
+    "required": ["contract_id", "confidence", "reason"],
+    "additionalProperties": False,
+}
+
 SYSTEM_ROLE = (
     "Você é um assistente que organiza emails corporativos por contrato. "
     "Recebe o cadastro dos contratos (dados fixos + contexto) e um email, e "
@@ -64,6 +75,12 @@ def load_contexts() -> dict[str, str]:
 
 def _client(config: dict) -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=config["anthropic_api_key"])
+
+
+def _text(msg) -> str:
+    """Extrai o texto da resposta, pulando blocos de thinking (o modelo pensa
+    por padrão, então content[0] nem sempre é o bloco de texto)."""
+    return next((b.text for b in msg.content if b.type == "text"), "")
 
 
 def _contexts_block(contracts: dict, contexts: dict[str, str]) -> str:
@@ -121,23 +138,22 @@ def classify_email(config, email, body, contracts, contexts, system=None) -> dic
         "</email>\n\n"
         f"IDs válidos de contrato: {valid_ids}\n"
         "Decida a qual contrato este email pertence. Se não houver contrato "
-        "claro, use contract_id null. Responda SOMENTE com JSON no formato:\n"
-        '{"contract_id": <id ou null>, "confidence": <0 a 1>, "reason": "<curta>"}'
+        "claro, use contract_id null. confidence vai de 0 a 1."
     )
 
     msg = _client(config).messages.create(
         model=config.get("model", "claude-sonnet-5"),
         max_tokens=300,
         system=system,
-        messages=[
-            {"role": "user", "content": user},
-            {"role": "assistant", "content": "{"},  # prefill: força JSON
-        ],
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": CLASSIFY_SCHEMA}},
     )
 
-    raw = "{" + msg.content[0].text  # recompõe a chave inicial do prefill
+    if not msg.content:  # recusa de segurança ou similar
+        return {"contract_id": None, "confidence": 0.0,
+                "reason": "sem resposta do modelo", "usage": _usage_dict(msg.usage)}
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_text(msg))
     except json.JSONDecodeError:
         return {"contract_id": None, "confidence": 0.0,
                 "reason": "parse falhou", "usage": _usage_dict(msg.usage)}
@@ -173,4 +189,4 @@ def summarize_folder(config, folder_name, emails) -> str:
         system=[{"type": "text", "text": SYSTEM_ROLE}],
         messages=[{"role": "user", "content": user}],
     )
-    return msg.content[0].text.strip()
+    return _text(msg).strip()

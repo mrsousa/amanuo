@@ -18,6 +18,8 @@ do contrato é extraído automaticamente do início do nome:
         ata_2024-03.docx
       DF22-C038 - Vale - Projeto Detalhado Maravilhas III/
         contrato.pdf
+        RDO/
+          DF22-C038-5-ENG-RDO-037.docx   (subpastas são varridas recursivamente)
 
 Padrão do código (as duas letras identificam a unidade de negócio, ex. DF =
 DF+ Engenharia; "C" no padrão novo indica contrato):
@@ -56,6 +58,30 @@ INGEST_ROLE = (
     "invente e não repita o que provavelmente já veio de outro documento."
 )
 
+DISTILL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fields": {
+            "type": "object",
+            "properties": {
+                "cliente": {"type": "string"},
+                "numero_contrato": {"type": "string"},
+                "objeto": {"type": "string"},
+                "valor": {"type": "string"},
+                "data_inicio": {"type": "string"},
+                "prazo": {"type": "string"},
+                "responsavel": {"type": "string"},
+            },
+            "required": ["cliente", "numero_contrato", "objeto", "valor",
+                         "data_inicio", "prazo", "responsavel"],
+            "additionalProperties": False,
+        },
+        "context_md": {"type": "string"},
+    },
+    "required": ["fields", "context_md"],
+    "additionalProperties": False,
+}
+
 
 # ---------- extração de texto ----------
 def extract_pdf(path: str) -> str:
@@ -93,26 +119,24 @@ def distill(config, cid: str, nome_arquivo: str, texto: str) -> tuple[dict, str,
     """Retorna (campos_fixos, contexto_md, usage) para UM documento."""
     user = (
         f"Documento \"{nome_arquivo}\" do contrato \"{cid}\":\n\n{texto[:MAX_CHARS]}\n\n"
-        "Produza SOMENTE um JSON com duas chaves:\n"
-        '{"fields": {"cliente": "", "numero_contrato": "", "objeto": "", '
-        '"valor": "", "data_inicio": "", "prazo": "", "responsavel": ""}, '
-        '"context_md": "<contexto em Markdown com o que ESTE documento traz: '
-        'partes, pessoas-chave, escopo, marcos, pendências e vocabulário '
-        'típico; ~150 palavras. Omita categorias sem informação aqui>"}\n'
-        "Deixe em branco os campos que não encontrar. Não invente dados."
+        "Preencha os campos fixos que encontrar (deixe em branco os que não "
+        "encontrar; não invente dados) e escreva um contexto em Markdown com "
+        "o que ESTE documento traz: partes, pessoas-chave, escopo, marcos, "
+        "pendências e vocabulário típico (~150 palavras; omita categorias "
+        "sem informação aqui)."
     )
     msg = classifier._client(config).messages.create(
         model=config.get("model", "claude-sonnet-5"),
         max_tokens=1500,
         system=[{"type": "text", "text": INGEST_ROLE}],
-        messages=[
-            {"role": "user", "content": user},
-            {"role": "assistant", "content": "{"},  # prefill: força JSON
-        ],
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": DISTILL_SCHEMA}},
     )
     usage = classifier._usage_dict(msg.usage)
+    if not msg.content:  # recusa de segurança ou similar
+        return {}, "", usage
     try:
-        data = json.loads("{" + msg.content[0].text)
+        data = json.loads(classifier._text(msg))
     except json.JSONDecodeError:
         return {}, "", usage
     fields = {k: v for k, v in (data.get("fields") or {}).items() if v}
@@ -197,7 +221,10 @@ def main():
     for folder_name in sorted(pastas):
         cid = classifier.extract_cid(folder_name)
         folder = os.path.join(fontes_dir, folder_name)
-        arquivos = sorted(glob.glob(os.path.join(folder, "*")))
+        arquivos = sorted(
+            p for p in glob.glob(os.path.join(folder, "**", "*"), recursive=True)
+            if os.path.isfile(p)
+        )
 
         if alvo_arquivo:
             arquivos = [p for p in arquivos if os.path.basename(p) == alvo_arquivo]

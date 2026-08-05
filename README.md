@@ -261,8 +261,9 @@ Os scripts aplicam boas práticas da API do Claude:
   em diante os tokens vêm do cache (~90% mais baratos). A *escrita* do cache
   tem um adicional (~25%), que acontece no 1º email — por isso o caching
   compensa quando a rodada tem vários emails.
-- **Prefill de JSON**: as chamadas que precisam de JSON prefixam a resposta com
-  `{`, eliminando preâmbulo e tornando o parse confiável.
+- **Structured outputs**: as chamadas que precisam de JSON usam
+  `output_config.format` (JSON Schema) para garantir a forma da resposta,
+  eliminando preâmbulo e parse frágil.
 - **Relatório de tokens**: cada `classify`/`ask` imprime tokens de entrada,
   saída e quanto veio do cache — métrica real de custo para acompanhar
   conforme a carteira cresce.
