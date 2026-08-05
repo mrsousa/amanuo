@@ -6,55 +6,79 @@
     python run.py classify --apply     # move de fato os emails
 """
 
-import json
 import os
-import re
 import sys
 
 from graph_client import GraphClient, load_config
 import classifier
 
-CONTEXTS_DIR = "contexts"
-
-
-def _slug(name: str) -> str:
-    """Transforma o nome da pasta num id de arquivo seguro."""
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
-
 
 def _contract_folders(graph: GraphClient, config: dict) -> list[dict]:
-    """Pastas que representam contratos (ignora as de sistema)."""
+    """Percorre a árvore de pastas do Outlook recursivamente e retorna as que
+    representam contratos — reconhecidas pelo nome bater com o padrão de
+    código (AA00-000 ou AA00-C000, ex. DF21-100, DF22-C038), em qualquer
+    profundidade. Não desce em pastas de sistema (ignore_folders) nem
+    continua descendo depois de encontrar uma pasta de contrato.
+
+    Cada pasta retornada ganha uma chave extra "_caminho" com o caminho
+    completo (separado por " > ") desde o nível superior, para auditoria."""
     ignore = set(config.get("ignore_folders", []))
-    return [f for f in graph.list_folders() if f["displayName"] not in ignore]
+    encontradas = []
+    fila = [(f, f["displayName"]) for f in graph.list_folders()
+            if f["displayName"] not in ignore]
+    while fila:
+        f, caminho = fila.pop(0)
+        if classifier.CODE_RE.match(f["displayName"]):
+            f["_caminho"] = caminho
+            encontradas.append(f)
+            continue
+        if f.get("childFolderCount", 0) > 0:
+            fila.extend(
+                (filho, f"{caminho} > {filho['displayName']}")
+                for filho in graph.list_child_folders(f["id"])
+            )
+    return encontradas
 
 
 def cmd_init(graph, config):
-    """Cria contracts.json com um registro por pasta existente."""
+    """Cria contracts.json com um registro por pasta de contrato encontrada.
+
+    Um contrato é marcado "ativo": true quando o caminho da pasta passa
+    exatamente pela pasta configurada em "pasta_ativos" (config.json,
+    padrão "02 - Projetos") — as demais (ex.: "...Finalizados e Outros",
+    anos anteriores) entram como "ativo": false."""
+    pasta_ativos = config.get("pasta_ativos", "02 - Projetos")
     contracts = classifier.load_contracts()
     for f in _contract_folders(graph, config):
-        cid = _slug(f["displayName"])
+        cid = classifier.extract_cid(f["displayName"])
+        caminho = f["_caminho"]
+        ativo = pasta_ativos in caminho.split(" > ")
         contracts.setdefault(cid, {
             "folder_id": f["id"],
             "folder_name": f["displayName"],
+            "folder_path": caminho,
+            "ativo": ativo,
             "cliente": "",
             "descricao": "",
         })
-        # mantém o folder_id atualizado
+        # mantém os metadados de pasta atualizados
         contracts[cid]["folder_id"] = f["id"]
         contracts[cid]["folder_name"] = f["displayName"]
-    json.dump(contracts, open("contracts.json", "w"), ensure_ascii=False, indent=2)
+        contracts[cid]["folder_path"] = caminho
+        contracts[cid]["ativo"] = ativo
+    classifier.save_contracts(contracts)
     print(f"contracts.json criado/atualizado com {len(contracts)} contrato(s).")
     print("Dica: preencha 'cliente' e 'descricao' à mão quando puder.")
 
 
 def cmd_bootstrap(graph, config):
     """Gera o contexto Markdown inicial de cada contrato."""
-    os.makedirs(CONTEXTS_DIR, exist_ok=True)
+    os.makedirs(classifier.CONTEXTS_DIR, exist_ok=True)
     contracts = classifier.load_contracts()
     if not contracts:
         sys.exit("Rode 'python run.py init' antes.")
     for cid, meta in contracts.items():
-        out = os.path.join(CONTEXTS_DIR, f"{cid}.md")
+        out = os.path.join(classifier.CONTEXTS_DIR, f"{cid}.md")
         if os.path.exists(out):
             print(f"  pulando {cid} (já tem contexto)")
             continue
@@ -67,7 +91,7 @@ def cmd_bootstrap(graph, config):
         open(out, "w", encoding="utf-8").write(
             f"# {meta['folder_name']}\n\n{summary}\n"
         )
-    print("Contextos gerados em ./contexts/")
+    print(f"Contextos gerados em ./{classifier.CONTEXTS_DIR}/")
 
 
 def cmd_classify(graph, config, apply: bool):

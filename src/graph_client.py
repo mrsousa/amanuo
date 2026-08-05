@@ -2,7 +2,7 @@
 
 Autenticação por *device code flow*: você roda o script, ele mostra um
 código e um link; você abre no navegador, faz login e autoriza. O token
-fica em cache local (token_cache.bin) pra não precisar logar toda vez.
+fica em cache local (dados/token_cache.bin) pra não precisar logar toda vez.
 """
 
 import json
@@ -13,7 +13,7 @@ import requests
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = ["Mail.ReadWrite"]
-CACHE_FILE = "token_cache.bin"
+CACHE_FILE = os.path.join("dados", "token_cache.bin")
 
 
 class GraphClient:
@@ -30,6 +30,7 @@ class GraphClient:
 
     def _save_cache(self, cache: msal.SerializableTokenCache):
         if cache.has_state_changed:
+            os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
             open(CACHE_FILE, "w").write(cache.serialize())
 
     def _get_token(self) -> str:
@@ -71,8 +72,19 @@ class GraphClient:
 
     # ---------- pastas ----------
     def list_folders(self) -> list[dict]:
-        """Retorna todas as pastas de email (id + nome)."""
+        """Retorna as pastas de nível superior da caixa de email (id + nome)."""
         folders, url = [], f"{GRAPH}/me/mailFolders?$top=100"
+        while url:
+            r = requests.get(url, headers=self._headers())
+            r.raise_for_status()
+            data = r.json()
+            folders.extend(data.get("value", []))
+            url = data.get("@odata.nextLink")
+        return folders
+
+    def list_child_folders(self, folder_id: str) -> list[dict]:
+        """Retorna as subpastas diretas de uma pasta."""
+        folders, url = [], f"{GRAPH}/me/mailFolders/{folder_id}/childFolders?$top=100"
         while url:
             r = requests.get(url, headers=self._headers())
             r.raise_for_status()

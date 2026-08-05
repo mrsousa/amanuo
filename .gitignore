@@ -1,11 +1,12 @@
 # Segredos e credenciais
 config.json
-token_cache.bin
+dados/token_cache.bin
 
-# Dados dos contratos (não versionar)
-contracts.json
-contexts/
-fontes/   # ajuste se mudar "fontes_dir" em config.json
+# dados/contracts.json e dados/contexts/ SÃO versionados por enquanto
+# (decisão consciente — revisar quando a carteira crescer ou tiver dado
+# mais sensível).
+
+fontes/   # documentos-fonte; ajuste se mudar "fontes_dir" em config.json
 
 # Python
 __pycache__/

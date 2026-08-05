@@ -10,10 +10,30 @@ Otimizações aplicadas:
 
 import json
 import os
+import re
 import glob
 import anthropic
 
-CONTEXTS_DIR = "contexts"
+# Tudo que é gerado/persistido pelo Amanuo (dados de contrato, token de
+# acesso) fica agrupado em dados/, fora da raiz do repositório.
+DADOS_DIR = "dados"
+CONTEXTS_DIR = os.path.join(DADOS_DIR, "contexts")
+CONTRACTS_FILE = os.path.join(DADOS_DIR, "contracts.json")
+
+# Padrão de código de contrato: antigo AA00-000 (ex. DF21-100), novo AA00-C000
+# (ex. DF22-C038). As duas letras identificam a unidade de negócio; o "C" no
+# padrão novo indica contrato. Usado para reconhecer contratos tanto nas
+# pastas de documentos (ingest.py) quanto nas pastas do Outlook (run.py).
+CODE_RE = re.compile(r"^([A-Za-z]{2}\d{2}-C?\d+)")
+
+
+def extract_cid(folder_name: str) -> str:
+    """Extrai o código do contrato do início do nome da pasta.
+
+    Ex.: 'DF22-C038 - Vale - ATO Maciço Final' -> 'DF22-C038'.
+    Sem match, usa o nome inteiro (fallback)."""
+    m = CODE_RE.match(folder_name.strip())
+    return m.group(1) if m else folder_name
 
 SYSTEM_ROLE = (
     "Você é um assistente que organiza emails corporativos por contrato. "
@@ -24,9 +44,14 @@ SYSTEM_ROLE = (
 
 
 def load_contracts() -> dict:
-    if not os.path.exists("contracts.json"):
+    if not os.path.exists(CONTRACTS_FILE):
         return {}
-    return json.load(open("contracts.json"))
+    return json.load(open(CONTRACTS_FILE))
+
+
+def save_contracts(contracts: dict) -> None:
+    os.makedirs(DADOS_DIR, exist_ok=True)
+    json.dump(contracts, open(CONTRACTS_FILE, "w"), ensure_ascii=False, indent=2)
 
 
 def load_contexts() -> dict[str, str]:

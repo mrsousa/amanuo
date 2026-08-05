@@ -6,21 +6,28 @@ saídas de uma vez: campos estruturados + contexto em Markdown.
 
 A pasta raiz onde ficam esses documentos é configurável (chave "fontes_dir"
 em config.json, padrão "fontes") para não colidir com a pasta docs/ do
-próprio repositório. Estrutura esperada dentro dela:
+próprio repositório. As pastas podem ter o nome completo do projeto — o ID
+do contrato é extraído automaticamente do início do nome:
 
     fontes/
-      4021/
+      DF21-100 - Vale - Projeto Conceitual e Detalhado/
         proposta.pdf
         ata_2024-03.docx
-      4055/
+      DF22-C038 - Vale - Projeto Detalhado Maravilhas III/
         contrato.pdf
 
-O nome da pasta (4021, 4055) é o ID do contrato — o mesmo usado em
-contracts.json e contexts/<id>.md.
+Padrão do código (as duas letras identificam a unidade de negócio, ex. DF =
+DF+ Engenharia; "C" no padrão novo indica contrato):
+    antigo: AA00-000   (ex.: DF21-100)
+    novo:   AA00-C000  (ex.: DF22-C038)
+
+O código extraído (DF21-100, DF22-C038) é o ID usado em contracts.json e
+contexts/<id>.md — precisa bater com o ID gerado por 'run.py init' a partir
+das pastas do Outlook.
 
 Uso:
     python ingest.py            # processa todos os contratos em fontes_dir
-    python ingest.py 4021       # processa só um contrato
+    python ingest.py DF22-C038  # processa só um contrato
 """
 
 import json
@@ -31,7 +38,6 @@ import glob
 import classifier
 from graph_client import load_config
 
-CONTEXTS_DIR = "contexts"
 MAX_CHARS = 20000  # teto de texto por contrato enviado ao modelo
 
 INGEST_ROLE = (
@@ -115,8 +121,8 @@ def distill(config, cid: str, texto: str) -> tuple[dict, str, dict]:
 
 
 # ---------- orquestração ----------
-def process_contract(config, cid: str, contracts: dict, fontes_dir: str) -> dict | None:
-    folder = os.path.join(fontes_dir, cid)
+def process_contract(config, cid: str, folder_name: str, contracts: dict, fontes_dir: str) -> dict | None:
+    folder = os.path.join(fontes_dir, folder_name)
     texto = extract_folder_text(folder)
     if not texto.strip():
         print(f"  {cid}: nenhum PDF/DOCX legível em {folder}, pulando")
@@ -127,16 +133,16 @@ def process_contract(config, cid: str, contracts: dict, fontes_dir: str) -> dict
 
     # --- dados fixos → contracts.json (preserva metadados de pasta do init) ---
     rec = contracts.get(cid, {})
-    preservar = {k: rec[k] for k in ("folder_id", "folder_name") if k in rec}
+    preservar = {k: rec[k] for k in ("folder_id", "folder_name", "folder_path", "ativo") if k in rec}
     rec.update(fields)
     rec.update(preservar)
     contracts[cid] = rec
 
     # --- contexto → contexts/<id>.md ---
     if context_md:
-        os.makedirs(CONTEXTS_DIR, exist_ok=True)
+        os.makedirs(classifier.CONTEXTS_DIR, exist_ok=True)
         titulo = rec.get("folder_name") or rec.get("cliente") or cid
-        with open(os.path.join(CONTEXTS_DIR, f"{cid}.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(classifier.CONTEXTS_DIR, f"{cid}.md"), "w", encoding="utf-8") as f:
             f.write(f"# {titulo} ({cid})\n\n{context_md}\n")
     return usage
 
@@ -146,25 +152,29 @@ def main():
     contracts = classifier.load_contracts()
     fontes_dir = config.get("fontes_dir", "fontes")
 
+    if not os.path.isdir(fontes_dir):
+        sys.exit(f"Pasta '{fontes_dir}/' não existe. Crie {fontes_dir}/<contrato>/ com os documentos.")
+    pastas = [d for d in os.listdir(fontes_dir)
+              if os.path.isdir(os.path.join(fontes_dir, d))]
+
     if len(sys.argv) > 1:
-        alvos = [sys.argv[1]]
-    else:
-        if not os.path.isdir(fontes_dir):
-            sys.exit(f"Pasta '{fontes_dir}/' não existe. Crie {fontes_dir}/<id>/ com os documentos.")
-        alvos = [d for d in os.listdir(fontes_dir)
-                 if os.path.isdir(os.path.join(fontes_dir, d))]
-    if not alvos:
+        alvo_cid = sys.argv[1]
+        pastas = [d for d in pastas if classifier.extract_cid(d) == alvo_cid]
+        if not pastas:
+            sys.exit(f"Nenhuma pasta em {fontes_dir}/ corresponde ao contrato '{alvo_cid}'.")
+    if not pastas:
         sys.exit(f"Nenhum contrato encontrado em {fontes_dir}/.")
 
     total = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
-    for cid in sorted(alvos):
-        u = process_contract(config, cid, contracts, fontes_dir)
+    for folder_name in sorted(pastas):
+        cid = classifier.extract_cid(folder_name)
+        u = process_contract(config, cid, folder_name, contracts, fontes_dir)
         if u:
             for k in total:
                 total[k] += u[k]
 
-    json.dump(contracts, open("contracts.json", "w"), ensure_ascii=False, indent=2)
-    print(f"\ncontracts.json e contexts/ atualizados.")
+    classifier.save_contracts(contracts)
+    print(f"\ncontracts.json e {classifier.CONTEXTS_DIR}/ atualizados.")
     print(f"[tokens: entrada {total['input']}, saída {total['output']}]")
 
 
